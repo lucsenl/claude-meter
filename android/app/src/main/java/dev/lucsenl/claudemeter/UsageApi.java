@@ -20,14 +20,14 @@ public final class UsageApi {
             ClaudeOAuthCredential credential = ClaudeOAuth.validCredential(app, false);
             Response usage = get(app, ClaudeOAuthProtocol.USAGE_URL, credential.accessToken);
             if (usage.status == 401) {
-                credential = ClaudeOAuth.validCredential(app, true);
+                credential = ClaudeOAuth.validCredential(app, true, credential.accessToken);
                 usage = get(app, ClaudeOAuthProtocol.USAGE_URL, credential.accessToken);
             }
             requireSuccess(usage, "subscription usage");
 
             Response profile = get(app, ClaudeOAuthProtocol.PROFILE_URL, credential.accessToken);
             if (profile.status == 401) {
-                credential = ClaudeOAuth.validCredential(app, true);
+                credential = ClaudeOAuth.validCredential(app, true, credential.accessToken);
                 profile = get(app, ClaudeOAuthProtocol.PROFILE_URL, credential.accessToken);
             }
             requireSuccess(profile, "profile");

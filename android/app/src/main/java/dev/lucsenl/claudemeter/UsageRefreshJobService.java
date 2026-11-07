@@ -12,7 +12,8 @@ public final class UsageRefreshJobService extends JobService {
             try {
                 UsageApi.refreshAndCacheLocked(getApplicationContext());
             } catch (Exception exception) {
-                retry = true;
+                // A rejected OAuth grant needs sign-in, not an immediate job retry.
+                retry = !(exception instanceof ClaudeOAuth.ReauthenticationRequiredException);
             }
             jobFinished(params, retry);
         }, "claude-meter-refresh");

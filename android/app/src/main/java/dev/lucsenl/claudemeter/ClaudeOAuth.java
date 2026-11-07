@@ -10,7 +10,15 @@ import org.json.JSONObject;
 
 /** Android token exchange/refresh for Claude subscription OAuth. */
 public final class ClaudeOAuth {
+    private static final Object TOKEN_LOCK = new Object();
+
     private ClaudeOAuth() {}
+
+    public static final class ReauthenticationRequiredException extends Exception {
+        public ReauthenticationRequiredException(String message) {
+            super(message);
+        }
+    }
 
     public static ClaudeOAuthCredential exchangeCode(Context context, String input,
             String verifier, String expectedState) throws Exception {
@@ -29,29 +37,47 @@ public final class ClaudeOAuth {
                 .put("code_verifier", verifier)
                 .put("state", result.state.isEmpty() ? expectedState : result.state);
 
-        ClaudeOAuthCredential credential = tokenRequest(context, body, null);
-        SecureTokenStore.save(context, credential);
-        return credential;
+        // A new sign-in and a background refresh must never overwrite each other.
+        synchronized (TOKEN_LOCK) {
+            ClaudeOAuthCredential credential = tokenRequest(context, body, null);
+            SecureTokenStore.save(context, credential);
+            return credential;
+        }
     }
 
     public static ClaudeOAuthCredential validCredential(Context context, boolean forceRefresh)
             throws Exception {
-        ClaudeOAuthCredential current = SecureTokenStore.load(context);
-        if (current == null || !current.isUsable()) {
-            throw new Exception("Sign in with Claude first.");
+        return validCredential(context, forceRefresh, null);
+    }
+
+    /** One refresh at a time, always re-reading the latest stored token. */
+    public static ClaudeOAuthCredential validCredential(Context context, boolean forceRefresh,
+            String rejectedAccessToken) throws Exception {
+        synchronized (TOKEN_LOCK) {
+            ClaudeOAuthCredential current = SecureTokenStore.load(context);
+            if (current == null || !current.isUsable()) {
+                throw new ReauthenticationRequiredException("Sign in with Claude first.");
+            }
+            if (!forceRefresh && !current.shouldRefresh(System.currentTimeMillis())) {
+                return current;
+            }
+            // A concurrent request might already have refreshed the token rejected by 401.
+            if (forceRefresh && ClaudeOAuthProtocol.wasAccessTokenReplaced(
+                    rejectedAccessToken, current.accessToken)) {
+                return current;
+            }
+
+            JSONObject body = new JSONObject()
+                    .put("grant_type", "refresh_token")
+                    .put("client_id", ClaudeOAuthProtocol.CLIENT_ID)
+                    .put("refresh_token", current.refreshToken);
+            body.put("scope", current.scope.isEmpty()
+                    ? ClaudeOAuthProtocol.SCOPES : current.scope);
+
+            ClaudeOAuthCredential refreshed = tokenRequest(context, body, current);
+            SecureTokenStore.save(context, refreshed);
+            return refreshed;
         }
-        if (!forceRefresh && !current.shouldRefresh(System.currentTimeMillis())) return current;
-
-        JSONObject body = new JSONObject()
-                .put("grant_type", "refresh_token")
-                .put("client_id", ClaudeOAuthProtocol.CLIENT_ID)
-                .put("refresh_token", current.refreshToken);
-        body.put("scope", current.scope.isEmpty()
-                ? ClaudeOAuthProtocol.SCOPES : current.scope);
-
-        ClaudeOAuthCredential refreshed = tokenRequest(context, body, current);
-        SecureTokenStore.save(context, refreshed);
-        return refreshed;
     }
 
     private static ClaudeOAuthCredential tokenRequest(Context context, JSONObject body,
@@ -74,6 +100,16 @@ public final class ClaudeOAuth {
             int status = connection.getResponseCode();
             String response = readBody(connection, status);
             if (status < 200 || status >= 300) {
+                if (isInvalidGrant(response)) {
+                    if ("authorization_code".equals(body.optString("grant_type"))) {
+                        throw new ReauthenticationRequiredException(
+                                "Claude authorization code was rejected (invalid_grant). "
+                                        + "Start sign-in again and paste a NEW code.");
+                    }
+                    throw new ReauthenticationRequiredException(
+                            "Claude session is no longer valid (invalid_grant). "
+                                    + "Sign in with Claude again.");
+                }
                 String detail = safeOAuthError(response);
                 throw new Exception("Claude sign-in failed (HTTP " + status + ")"
                         + (detail.isEmpty() ? "." : ": " + detail));
@@ -95,6 +131,19 @@ public final class ClaudeOAuth {
         } finally {
             connection.disconnect();
         }
+    }
+
+    private static boolean isInvalidGrant(String raw) {
+        try {
+            JSONObject json = new JSONObject(raw == null ? "{}" : raw);
+            Object error = json.opt("error");
+            if (error instanceof String) return "invalid_grant".equals(error);
+            if (error instanceof JSONObject) {
+                return "invalid_grant".equals(((JSONObject) error).optString("type", ""))
+                        || "invalid_grant".equals(((JSONObject) error).optString("code", ""));
+            }
+        } catch (Exception ignored) {}
+        return false;
     }
 
     private static String safeOAuthError(String raw) {

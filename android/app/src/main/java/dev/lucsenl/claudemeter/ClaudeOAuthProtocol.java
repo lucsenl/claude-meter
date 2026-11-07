@@ -67,6 +67,13 @@ public final class ClaudeOAuthProtocol {
         return new AuthorizationResult(raw, "");
     }
 
+    /** True if another request already replaced the access token rejected by a 401. */
+    public static boolean wasAccessTokenReplaced(String rejected, String current) {
+        return rejected != null && !rejected.isEmpty()
+                && current != null && !current.isEmpty()
+                && !rejected.equals(current);
+    }
+
     public static boolean stateMatches(String actual, String expected) {
         if (actual == null || actual.isEmpty()) return true;
         if (expected == null || expected.isEmpty()) return false;

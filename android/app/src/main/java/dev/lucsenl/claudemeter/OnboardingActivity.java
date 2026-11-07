@@ -136,20 +136,30 @@ public final class OnboardingActivity extends AppCompatActivity {
         completeButton.setText("Signing in…");
         executor.execute(() -> {
             String error = "";
+            boolean signedIn = false;
             try {
                 ClaudeOAuth.exchangeCode(getApplicationContext(), code, verifier, expectedState);
-                UsageApi.refreshAndCacheLocked(getApplicationContext());
+                // The one-time code has now been exchanged; complete login before
+                // contacting usage/profile endpoints so a failure cannot cause code reuse.
                 AppPreferences.completeOnboarding(getApplicationContext());
                 RefreshScheduler.schedulePeriodic(getApplicationContext());
+                signedIn = true;
+                try {
+                    UsageApi.refreshAndCacheLocked(getApplicationContext());
+                } catch (Exception ignored) {
+                    // UsageApi stores the failure for the dashboard; sign-in still succeeded.
+                }
             } catch (Exception exception) {
                 error = UsageApi.safeMessage(exception);
             }
             String finalError = error;
+            boolean finalSignedIn = signedIn;
             runOnUiThread(() -> {
                 completeButton.setEnabled(true);
                 completeButton.setText("Complete sign-in");
-                if (!finalError.isEmpty()) {
-                    Toast.makeText(this, finalError, Toast.LENGTH_LONG).show();
+                if (!finalSignedIn) {
+                    Toast.makeText(this, finalError.isEmpty()
+                            ? "Claude sign-in failed." : finalError, Toast.LENGTH_LONG).show();
                     return;
                 }
                 startActivity(new Intent(this, MainActivity.class)

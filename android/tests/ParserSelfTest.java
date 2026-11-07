@@ -77,6 +77,10 @@ public final class ParserSelfTest {
         assert "s1".equals(callback.state);
         assert ClaudeOAuthProtocol.stateMatches("same", "same");
         assert !ClaudeOAuthProtocol.stateMatches("one", "two");
+        assert ClaudeOAuthProtocol.wasAccessTokenReplaced("old", "new");
+        assert !ClaudeOAuthProtocol.wasAccessTokenReplaced("same", "same");
+        assert !ClaudeOAuthProtocol.wasAccessTokenReplaced("", "new");
+        assert !ClaudeOAuthProtocol.wasAccessTokenReplaced("old", null);
     }
 
     private static void testSnapshotRoundTrip() throws Exception {
